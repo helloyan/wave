@@ -65,3 +65,5 @@ send(Sock, Msg) ->
             Err
     end.
 
+subscribe(Topic) ->
+    Msg = #mqtt_msg

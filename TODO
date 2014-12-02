@@ -1,0 +1,45 @@
+
+TODO (ordered by priority):
+	X plain authentication (using eredis simple service)
+    X wavectl cli tool - connect
+	- topic wildcards
+    - device connection/disconnection topics
+    - erlang inter-process pubsub mechanism (bypass tcp network layer)
+    - wavectl_mngr
+    - wavectl: help(), ping(), version()
+    - wavectl: create/update/delete/list/get {user, device}
+	- keepalive
+	- store & forward
+	- SSL
+	- deployment : docker image
+	- webservices
+	- multiuser
+	- SSL resumption & speed optimizations
+	- scalability
+        - eredis pool
+	- clients keepalice
+		PINGREQ from server to client is not available in spec.
+		this could be allowed on a client basis (for clients supporting this, as mosquitto)
+	- SMS module
+	- push module
+    - CDRs / connection logs
+
+IN PARALLEL
+	- android client
+	- python/nodejs libraries
+	- web interface
+
+IDEAS:
+    - news paper
+        a daemon looks at website news
+        for each news, publish link to a topic
+
+        client receive news notification
+        display a popup + a box into the application
+        buttons: ignore | read now | archive/readit later
+            ignore => trash
+            read now => open the browser on news page
+            read later => add it to pocker/poche/whatever
+
+    - security
+        server publish 
