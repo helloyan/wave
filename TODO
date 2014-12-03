@@ -9,7 +9,7 @@ TODO (ordered by priority):
     - wavectl: help(), ping(), version()
     - wavectl: create/update/delete/list/get {user, device}
 	- keepalive
-	- store & forward
+	- store & forward (offline clients)
 	- SSL
 	- deployment : docker image
 	- webservices
