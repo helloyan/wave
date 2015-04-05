@@ -32,7 +32,7 @@
 
 %
 %-export([get/1, subscribe/2, get_subscribers/1]).
--export([dump/0, subscribe/2, unsubscribe/1, unsubscribe/2, match/1]).
+-export([dump/0, subscribe/2, subscribe/3, unsubscribe/1, unsubscribe/2, match/1]).
 % gen_server API
 -export([start_link/0, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -52,8 +52,11 @@ init(_) ->
 %
 % Name: TopicName | {TopicName, Fields}
 subscribe(Name, Subscriber) ->
-    lager:debug("~p subscribing to ~p topic", [Subscriber, Name]),
-    gen_server:call(?MODULE, {subscribe, Name, Subscriber}).
+    subscribe(Name, Subscriber, 0).
+
+subscribe(Name, Subscriber, Qos) ->
+    lager:debug("~p subscribing to ~p topic (qos=~p)", [Subscriber, Name, Qos]),
+    gen_server:call(?MODULE, {subscribe, Name, Subscriber, Qos}).
 
 unsubscribe(Subscriber) ->
     gen_server:call(?MODULE, {unsubscribe, Subscriber}).
@@ -76,7 +79,7 @@ handle_call(dump, _, State=#state{subscriptions=S}) ->
     priv_dump(S),
     {reply, ok, State};
 
-handle_call({subscribe, Topic, Subscriber}, _, State=#state{subscriptions=Subscriptions}) ->
+handle_call({subscribe, Topic, Subscriber, Qos}, _, State=#state{subscriptions=Subscriptions}) ->
     {TopicName, Fields} = case Topic of
         {T, M} -> 
             {T, M};
@@ -84,9 +87,9 @@ handle_call({subscribe, Topic, Subscriber}, _, State=#state{subscriptions=Subscr
             {Topic, mqtt_topic_match:fields(Topic)}
     end,
 
-    {Reply, S2} = case lists:filter(fun(Item) -> Item =:= {TopicName,Fields,Subscriber} end, Subscriptions) of
+    {Reply, S2} = case lists:filter(fun(Item) -> Item =:= {TopicName,Fields,Subscriber,Qos} end, Subscriptions) of
         [] ->
-            {ok, Subscriptions ++ [{TopicName,Fields,Subscriber}]};
+            {ok, Subscriptions ++ [{TopicName,Fields,Subscriber,Qos}]};
 
         _  ->
             lager:error("~p already subscribed to ~p (~p)", [Subscriber, TopicName, Fields]),
@@ -100,7 +103,7 @@ handle_call({unsubscribe, Subscriber}, _, State=#state{subscriptions=S}) ->
     {reply, ok, State#state{subscriptions=S2}};
 
 handle_call({unsubscribe, TopicName, Subscriber}, _, State=#state{subscriptions=S}) ->
-    S2 = lists:filter(fun({T,_,Sub}) ->
+    S2 = lists:filter(fun({T,_,Sub,_}) ->
             {T,Sub} =/= {TopicName, Subscriber}
         end, S
     ),
@@ -146,13 +149,13 @@ priv_unsubscribe(S, [H|T], S2) ->
     priv_unsubscribe(S, T, [H|S2]).
 
 % exact match
-priv_match(Topic, [{Topic, _, S}|T], M) ->
-    priv_match(Topic, T, [{Topic,S,[]}|M]);
+priv_match(Topic, [{Topic, _, S, Qos}|T], M) ->
+    priv_match(Topic, T, [{Topic,S,[],Qos}|M]);
 % regex
-priv_match(Topic, [{Re, Fields, S}|T], M) ->
+priv_match(Topic, [{Re, Fields, S, Qos}|T], M) ->
     MatchList = case mqtt_topic_match:match(Re, {Topic, Fields}) of
         {ok, MatchFields} ->
-            [{Re,S,MatchFields}|M];
+            [{Re,S,MatchFields,Qos}|M];
 
         fail ->
             M

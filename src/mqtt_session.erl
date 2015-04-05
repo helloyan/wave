@@ -201,10 +201,8 @@ connected(#mqtt_msg{type='PINGRESP'}, _, StateData=#session{pingid=Ref,keepalive
 
 connected(Msg=#mqtt_msg{type='PUBLISH', qos=Qos, payload=P}, _, StateData=#session{deviceid=_DeviceID,keepalive=Ka}) ->
 
-    {ok, MsgHandler} = mqtt_message:start_link(),
-    lager:info("MsgHandler= ~p", [MsgHandler]),
-    
     % async
+    {ok, MsgHandler} = mqtt_message:start_link(),
     mqtt_message:publish(MsgHandler, {in, Msg, self()}),
 
 	{reply, undefined, connected, StateData, round(Ka*1.5)};
@@ -215,9 +213,14 @@ connected(#mqtt_msg{type='SUBSCRIBE', payload=P}, _, StateData=#session{topics=T
     Topics = proplists:get_value(topics, P),
   
     % subscribe to all listed topics (creating it if it don't exists)
-    [ mqtt_topic_registry:subscribe(Topic, {?MODULE,publish,self()}) || {Topic,_Qos} <- Topics ],
+    GrantedQos = lists:map(fun({Topic, Qos}) ->
+            mqtt_topic_registry:subscribe(Topic, {?MODULE,publish,self()}, Qos),
+            Qos
+        end,
+        Topics
+    ),
 
-	Resp  = #mqtt_msg{type='SUBACK', payload=[{msgid,MsgId},{qos,[1]}]},
+	Resp  = #mqtt_msg{type='SUBACK', payload=[{msgid,MsgId},{granted_qos, GrantedQos}]},
 
     lager:info("Ka=~p", [Ka]),
     {reply, Resp, connected, StateData#session{topics=Topics++T}, round(Ka*1.5)};
@@ -242,10 +245,8 @@ connected(#mqtt_msg{type='UNSUBSCRIBE', payload=P}, _, StateData=#session{topics
 connected({publish, {Topic,_}, Content, Qos, Clb}, _,
           StateData=#session{transport=Transport,keepalive=Ka}) ->
     lager:debug("~p: publish message to subscriber (QOS=~p)", [self(), Qos]),
-    {ok, MsgHandler} = mqtt_message:start_link(),
-    lager:info("MsgHandler= ~p", [MsgHandler]),
-    
     % async
+    {ok, MsgHandler} = mqtt_message:start_link(),
     mqtt_message:publish(MsgHandler, {out, {Topic, Content, Qos, Clb, Transport}, self()}),
 
     {reply, ok, connected, StateData, round(Ka*1.5)};

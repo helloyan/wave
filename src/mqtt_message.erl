@@ -62,7 +62,7 @@ await({in, #mqtt_msg{type='PUBLISH', qos=Qos, payload=P}, ClientPid}, StateData)
         case is_process_alive(Pid) of
             true ->
                 lager:info("candidate: pid=~p, topic=~p, content=~p", [Pid, Topic, Content]),
-                Mod:Fun(Pid, {Topic,TopicMatch}, Content, Qos, {undef,undef});
+                Mod:Fun(Pid, {Topic,TopicMatch}, Content, min(Qos, PubQos), {undef,undef});
 
             _ ->
                 % SHOULD NEVER HAPPEND
@@ -70,10 +70,10 @@ await({in, #mqtt_msg{type='PUBLISH', qos=Qos, payload=P}, ClientPid}, StateData)
 
         end
 
-        || _Subscr={TopicMatch, {Mod,Fun,Pid}, _Fields} <- MatchList
+        || _Subscr={TopicMatch, {Mod,Fun,Pid}, _Fields, PubQos} <- MatchList
     ],
 
-	%{next_state, await, StateData}.
+    %{next_state, await, StateData}.
     % currently we just destroy the message server (qos = 0 => no response awaited)
     % TODO: pool in back this server to pool mngr
     {stop, normal, StateData};

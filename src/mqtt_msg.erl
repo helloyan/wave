@@ -271,7 +271,8 @@ encode_payload('PUBREC', Opts) ->
 
 encode_payload('SUBACK', Opts) ->
 	MsgId = proplists:get_value(msgid, Opts),
-	Qos   = proplists:get_value(qos, Opts),
+    % is a list of granted qos
+	Qos   = proplists:get_value(granted_qos, Opts),
 
 	<<
 	  MsgId:16,
