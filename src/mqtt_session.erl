@@ -27,7 +27,7 @@
 % gen_fsm
 -export([init/1, handle_event/3, handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
 
--export([handle/2, publish/4, is_alive/1, garbage_collect/1]).
+-export([handle/2, publish/5, is_alive/1, garbage_collect/1]).
 -export([initiate/3, connected/2, connected/3]).
 %
 % role
@@ -82,6 +82,7 @@ init(Transport) ->
 
 %%
 
+% Message received from peer (on TCP socket)
 handle(Pid, Msg) ->
 	Resp = gen_fsm:sync_send_event(Pid, Msg),
 	lager:info("return: ~p", [Resp]),
@@ -109,9 +110,10 @@ garbage_collect(_Pid) ->
 
 %
 % a message is published for me
-%
-publish(Pid, Topic, Content, Qos) ->
-    gen_fsm:sync_send_event(Pid, {publish, Topic, Content, Qos}).
+
+% Message PUBLISHED by another client, to send to the peer (on TCP socket)
+publish(Pid, Topic, Content, Qos, Clb={FromPid, Fun}) ->
+    gen_fsm:sync_send_event(Pid, {publish, Topic, Content, Qos, Clb}).
 
 %% STATES
 
@@ -197,56 +199,15 @@ connected(#mqtt_msg{type='PINGRESP'}, _, StateData=#session{pingid=Ref,keepalive
     gen_fsm:cancel_timer(Ref),
     {reply, undefined, connected, StateData#session{pingid=undefined}, round(Ka*1.5)};
 
-connected(#mqtt_msg{type='PUBLISH', qos=Qos, payload=P}, _, StateData=#session{deviceid=_DeviceID,keepalive=Ka}) ->
-    Topic   = proplists:get_value(topic, P),
-    Content = proplists:get_value(data, P),
+connected(Msg=#mqtt_msg{type='PUBLISH', qos=Qos, payload=P}, _, StateData=#session{deviceid=_DeviceID,keepalive=Ka}) ->
 
-    MatchList = mqtt_topic_registry:match(Topic),
-    lager:info("matchlist= ~p", [MatchList]),
-    [
-        case is_process_alive(Pid) of
-            true ->
-                %TODO: add MatchTopic in parameters
-                %      ie the matching topic rx that lead to executing this callback
-                %
-                %      in case of error (socket closed), subscriber is automatically registered
-                %      to offline
-                lager:info("candidate: pid=~p, topic=~p, content=~p", [Pid, Topic, Content]),
-                Ret = Mod:Fun(Pid, {Topic,TopicMatch}, Content, Qos),
-                lager:info("publish to client: ~p", [Ret]),
-                case {Qos, Ret} of
-                    {0, disconnect} ->
-                        lager:debug("client ~p disconnected but QoS = 0. message dropped", [Pid]);
+    {ok, MsgHandler} = mqtt_message:start_link(),
+    lager:info("MsgHandler= ~p", [MsgHandler]),
+    
+    % async
+    mqtt_message:publish(MsgHandler, {in, Msg, self()}),
 
-                    {_, disconnect} ->
-                        lager:debug("client ~p disconnected while sending message", [Pid]),
-%                        mqtt_topic_registry:unsubscribe(Subscr),
-%                        mqtt_offline:register(Topic, DeviceID),
-                        mqtt_offline:event(undefined, {Topic, Qos}, Content),
-                        ok;
-
-                    _ ->
-                        ok
-                end;
-
-            _ ->
-                % SHOULD NEVER HAPPEND
-                lager:error("deadbeef ~p", [Pid])
-
-        end
-
-        || _Subscr={TopicMatch, {Mod,Fun,Pid}, _Fields} <- MatchList
-    ],
-
-    Resp = case Qos of
-        2 ->
-            #mqtt_msg{type='PUBREC', payload=[{msgid,1}]};
-        1 ->
-	        #mqtt_msg{type='PUBACK', payload=[{msgid,1}]};
-        _ ->
-            undefined
-    end,
-	{reply, Resp, connected, StateData, round(Ka*1.5)};
+	{reply, undefined, connected, StateData, round(Ka*1.5)};
 
 %TODO: prevent subscribing multiple times to the same topic
 connected(#mqtt_msg{type='SUBSCRIBE', payload=P}, _, StateData=#session{topics=T, keepalive=Ka}) ->
@@ -278,29 +239,16 @@ connected(#mqtt_msg{type='UNSUBSCRIBE', payload=P}, _, StateData=#session{topics
     lager:info("Ka=~p ~p", [Ka, OldTopics]),
     {reply, Resp, connected, StateData#session{topics=NewTopics}, round(Ka*1.5)};
 
-connected({publish, {Topic,_}, Content, Qos}, _,
-          StateData=#session{transport={Callback,Transport,Socket},keepalive=Ka}) ->
-    lager:debug("~p: publish message to client with QoS=~p", [self(), Qos]),
+connected({publish, {Topic,_}, Content, Qos, Clb}, _,
+          StateData=#session{transport=Transport,keepalive=Ka}) ->
+    lager:debug("~p: publish message to subscriber (QOS=~p)", [self(), Qos]),
+    {ok, MsgHandler} = mqtt_message:start_link(),
+    lager:info("MsgHandler= ~p", [MsgHandler]),
+    
+    % async
+    mqtt_message:publish(MsgHandler, {out, {Topic, Content, Qos, Clb, Transport}, self()}),
 
-    Msg   = #mqtt_msg{type='PUBLISH', payload=[{topic,Topic}, {content, Content}]},
-    State = case Qos of 
-        0 -> 
-            Callback:send(Transport, Socket, Msg);
-
-        _ ->
-            %TODO
-            lager:error("NOT IMPLEMENTED"),
-            ok
-    end,
-
-	lager:info("publish msg status= ~p", [State]),
-	case State of
-		{error, _Err} ->
-			{stop, normal, disconnect, StateData};
-
-		ok ->
-			{reply, ok, connected, StateData, round(Ka*1.5)}
-	end;
+    {reply, ok, connected, StateData, round(Ka*1.5)};
 
 connected(ping, _, StateData=#session{transport={Callback,Transport,Socket}}) ->
     Ret = Callback:crlfping(Transport, Socket),
