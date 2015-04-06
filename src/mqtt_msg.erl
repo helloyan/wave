@@ -233,6 +233,7 @@ encode_payload('PUBLISH', Opts) ->
     <<
         (encode_string(Topic))/binary,
         %MsgID:16,
+        (if MsgID =:= undefined -> <<>>; true -> <<MsgID:16/integer>> end)/binary,
         % payload
         (bin(Content))/binary
     >>;

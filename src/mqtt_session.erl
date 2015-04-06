@@ -27,7 +27,7 @@
 % gen_fsm
 -export([init/1, handle_event/3, handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
 
--export([handle/2, publish/5, is_alive/1, garbage_collect/1]).
+-export([handle/2, publish/6, is_alive/1, garbage_collect/1]).
 -export([initiate/3, connected/2, connected/3]).
 %
 % role
@@ -112,8 +112,8 @@ garbage_collect(_Pid) ->
 % a message is published for me
 
 % Message PUBLISHED by another client, to send to the peer (on TCP socket)
-publish(Pid, Topic, Content, Qos, Clb={FromPid, Fun}) ->
-    gen_fsm:sync_send_event(Pid, {publish, Topic, Content, Qos, Clb}).
+publish(Pid, Topic, MsgID, Content, Qos, Clb={_,_,_}) ->
+    gen_fsm:sync_send_event(Pid, {publish, Topic, MsgID, Content, Qos, Clb}).
 
 %% STATES
 
@@ -242,12 +242,12 @@ connected(#mqtt_msg{type='UNSUBSCRIBE', payload=P}, _, StateData=#session{topics
     lager:info("Ka=~p ~p", [Ka, OldTopics]),
     {reply, Resp, connected, StateData#session{topics=NewTopics}, round(Ka*1.5)};
 
-connected({publish, {Topic,_}, Content, Qos, Clb}, _,
+connected({publish, {Topic,_}, MsgId, Content, Qos, Clb}, _,
           StateData=#session{transport=Transport,keepalive=Ka}) ->
     lager:debug("~p: publish message to subscriber (QOS=~p)", [self(), Qos]),
     % async
     {ok, MsgHandler} = mqtt_message:start_link(),
-    mqtt_message:publish(MsgHandler, {out, {Topic, Content, Qos, Clb, Transport}, self()}),
+    mqtt_message:publish(MsgHandler, {out, {Topic, MsgId, Content, Qos, Clb, Transport}, self()}),
 
     {reply, ok, connected, StateData, round(Ka*1.5)};
 
