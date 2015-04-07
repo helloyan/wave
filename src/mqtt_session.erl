@@ -67,7 +67,9 @@
     topics = [], % list of subscribed topics
     transport,
     pingid = undefined,
-    keepalive
+    keepalive,
+
+    messages = []
 }).
 
 -define(CONNECT_TIMEOUT  , 5000). % ms
@@ -199,11 +201,19 @@ connected(#mqtt_msg{type='PINGRESP'}, _, StateData=#session{pingid=Ref,keepalive
     gen_fsm:cancel_timer(Ref),
     {reply, undefined, connected, StateData#session{pingid=undefined}, round(Ka*1.5)};
 
-connected(Msg=#mqtt_msg{type='PUBLISH', qos=Qos, payload=P}, _, StateData=#session{deviceid=_DeviceID,keepalive=Ka}) ->
+connected(Msg=#mqtt_msg{type='PUBLISH', qos=Qos, payload=P}, _, StateData=#session{deviceid=_DeviceID,keepalive=Ka,transport=Transport}) ->
 
     % async
-    {ok, MsgHandler} = mqtt_message:start_link(),
+    {ok, MsgHandler} = mqtt_message:start_link(Transport),
     mqtt_message:publish(MsgHandler, {in, Msg, self()}),
+
+	{reply, undefined, connected, StateData, round(Ka*1.5)};
+
+connected(Msg=#mqtt_msg{type='PUBACK', qos=Q, payload=P}, _, StateData=#session{keepalive=Ka,messages=M}) ->
+    MsgId  = proplists:get_value(msgid, P),
+    MsgPid = proplists:get_value(MsgId, M),
+    lager:debug("PUBACK ~p: ~p", [MsgId, MsgPid]),
+    mqtt_message:msg(MsgPid, Msg),
 
 	{reply, undefined, connected, StateData, round(Ka*1.5)};
 
@@ -243,13 +253,13 @@ connected(#mqtt_msg{type='UNSUBSCRIBE', payload=P}, _, StateData=#session{topics
     {reply, Resp, connected, StateData#session{topics=NewTopics}, round(Ka*1.5)};
 
 connected({publish, {Topic,_}, MsgId, Content, Qos, Clb}, _,
-          StateData=#session{transport=Transport,keepalive=Ka}) ->
+          StateData=#session{transport=Transport,keepalive=Ka,messages=Messages}) ->
     lager:debug("~p: publish message to subscriber (QOS=~p)", [self(), Qos]),
     % async
-    {ok, MsgHandler} = mqtt_message:start_link(),
-    mqtt_message:publish(MsgHandler, {out, {Topic, MsgId, Content, Qos, Clb, Transport}, self()}),
+    {ok, MsgHandler} = mqtt_message:start_link(Transport),
+    mqtt_message:publish(MsgHandler, {out, {Topic, MsgId, Content, Qos, Clb}, self()}),
 
-    {reply, ok, connected, StateData, round(Ka*1.5)};
+    {reply, MsgHandler, connected, StateData#session{messages=[{MsgId, MsgHandler}|Messages]}, round(Ka*1.5)};
 
 connected(ping, _, StateData=#session{transport={Callback,Transport,Socket}}) ->
     Ret = Callback:crlfping(Transport, Socket),
