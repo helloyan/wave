@@ -115,6 +115,7 @@ garbage_collect(_Pid) ->
 
 % Message PUBLISHED by another client, to send to the peer (on TCP socket)
 publish(Pid, Topic, MsgID, Content, Qos, Clb={_,_,_}) ->
+    %TODO: make it async (currently returns mqtt_message Pid)
     gen_fsm:sync_send_event(Pid, {publish, Topic, MsgID, Content, Qos, Clb}).
 
 %% STATES

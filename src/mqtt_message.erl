@@ -35,7 +35,8 @@
     subscribers=[],
 
     qos=0,
-    msgid=-1
+    msgid=-1,
+    clb=undefined
 }).
 
 %-define(CONNECT_TIMEOUT  , 5000). % ms
@@ -94,7 +95,7 @@ await({in, #mqtt_msg{type='PUBLISH', qos=Qos, payload=P}, ClientPid}, StateData)
     Topic   = proplists:get_value(topic, P),
     Content = proplists:get_value(data, P),
     MsgId   = proplists:get_value(msgid, P),
-    lager:debug("await: received PUBLISH (QoS=1)"),
+    lager:debug("await: received PUBLISH (QoS=1, topic=~p)", [Topic]),
 
     MatchList = mqtt_topic_registry:match(Topic),
     lager:info("matchlist= ~p", [MatchList]),
@@ -102,7 +103,7 @@ await({in, #mqtt_msg{type='PUBLISH', qos=Qos, payload=P}, ClientPid}, StateData)
     OutProcs = lists:map(fun({TopicMatch, {Mod,Fun,Pid}, _Fields, PubQos}) ->
         case is_process_alive(Pid) of
             true ->
-                lager:info("candidate: pid=~p, topic=~p, content=~p", [Pid, Topic, Content]),
+                lager:info("candidate: pid=~p, topic=~p, content=~p", [Pid, TopicMatch, Content]),
                 Mod:Fun(Pid, {Topic,TopicMatch}, MsgId, Content, min(Qos, PubQos), {?MODULE, delivered, self()});
 
             _ ->
@@ -123,7 +124,9 @@ await({in, #mqtt_msg{type='PUBLISH', qos=Qos, payload=P}, ClientPid}, StateData)
 %% OUT MESSAGE
 await({out, {Topic, _, Content, Qos=0, _Clb}, ClientPid}, StateData=#state{transport={Callback,Transport,Socket}}) ->
     Msg   = #mqtt_msg{type='PUBLISH', payload=[{topic,Topic}, {content, Content}]},
-    Callback:send(Transport, Socket, Msg),
+    lager:debug("send PUBLISH to subscriber peer"),
+    Ret = Callback:send(Transport, Socket, Msg),
+    lager:debug("transport resp= ~p", [Ret]),
 
     % currently we destroy the server just know
     % TODO: pool in
@@ -131,19 +134,16 @@ await({out, {Topic, _, Content, Qos=0, _Clb}, ClientPid}, StateData=#state{trans
 
 await({out, {Topic, MsgID, Content, Qos=1, Clb}, ClientPid}, StateData=#state{transport={Callback,Transport,Socket}}) ->
     Msg   = #mqtt_msg{type='PUBLISH', qos=Qos, payload=[{topic,Topic}, {msgid, MsgID}, {content, Content}]},
-    Callback:send(Transport, Socket, Msg),
-
-    % notify delivery
-    {M,F,Pid} = Clb,
-    M:F(Pid, {MsgID, self(), Topic}),
+    Ret = Callback:send(Transport, Socket, Msg),
+    lager:debug("transport resp= ~p", [Ret]),
 
     % currently we destroy the server just know
     % TODO: pool in
-    {next_state, sent, StateData#state{qos=Qos,msgid=MsgID}}.
+    {next_state, sent, StateData#state{qos=Qos,msgid=MsgID, clb=Clb}}.
 
 % publisher side
-published({delivered, {MsgID, Pid, Topic}}, StateData=#state{subscribers=S,transport={Callback,Transport,Socket}}) ->
-    lager:debug("#~p MsgID delivered by ~p (~p)", [MsgID, Pid, Topic]),
+published({delivered, {MsgID, Pid}}, StateData=#state{subscribers=S,transport={Callback,Transport,Socket}}) ->
+    lager:debug("#~p MsgID delivered by ~p", [MsgID, Pid]),
     lager:debug("~p ~p ~p ~p", [Pid, S, lists:map(fun(X) -> X =:= Pid end, S),
             lists:partition(fun(X) -> X =:= Pid end, S)]),
 
@@ -164,12 +164,14 @@ published({delivered, {MsgID, Pid, Topic}}, StateData=#state{subscribers=S,trans
 
 % subscriber side
 % NOTE: Qos field not used in PUBACK message
-sent(#mqtt_msg{type='PUBACK', payload=P}, StateData=#state{qos=1, msgid=MsgID}) ->
+sent(#mqtt_msg{type='PUBACK', payload=P}, StateData=#state{qos=1, msgid=MsgID,clb={M,F,ClbPid}}) ->
+    lager:debug("received PUBACK"),
     case proplists:get_value(msgid, P) of
         MsgID ->
             lager:debug("matched msgid:~p PUBACK -> transaction complete", [MsgID]),
             % notify sender
-            
+            M:F(ClbPid, {MsgID, self()}),
+
             {stop, normal, StateData};
 
         _ ->
