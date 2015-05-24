@@ -32,8 +32,6 @@ MsgWorker::publish (Client, Msg, Subscribers)
 		# msg delivery retry
 		Self::timeout(S, $timeout, #PUBLISH)
 
-	
-
 # receive PUBACK/PUBCOMP from subscriber clients
 Client2::ack (Msg)
 	# we need to find MsgWorker managing this MsgID
@@ -50,12 +48,42 @@ MsgWorker::ack (Client, Msg)
 
 	# all messages delivered
 	if empty ( .Subscribers )
-		DB::delete ( .MsgID ) 
-		# send final response to publisher
-		.Publisher::send ( #PUBACK|#PUBCOMP )
+        Self::complete()
 
-		# v1
-		Self::destroy ()
+MsgWorker::complete ( )
+    DB::delete ( .MsgID )
+    # send final response to publisher
+    .Publisher::send ( #PUBACK|#PUBCOMP )
+    if ( fails and not .Publisher.clean-session )
+        DB:store(#PUBACK|#PUBCOMP)
 
-		# v2
-		Pool::free(Self)
+    # v1
+    Self::destroy ()
+
+    # v2
+    Pool::free(Self)
+
+#
+# retransmissions
+#
+MsgWorker::retry ( Subscriber, #PUBLISH )
+    S::send(#PUBLISH)
+    Self::timeout ( Subscriber, $timeout, #PUBLISH )
+
+
+#
+# TODO:
+#   - support retransmission for #PUBACK/#PUBCOMP
+#   - offline storage (subscriber disconnected)
+#           use of offline storage
+#           what is a subscriber goes offline btw message received from publisher and message sent ?
+#   - offline storage (publisher disconnected)
+#           if publisher is not online when message delivery is complete, what to do with #PUBACK/#PUBCOMP ?
+#           (same for #PUBREC)
+#
+#           if clean-session not set, store response messages and reemit when client reconnects
+#           if clean-session = 1, trash messages (fire & forget)
+#
+#   - publisher/subscribers disconnects & reconnects btw message received & message sent
+#       (Client gen_server has changed)
+#
